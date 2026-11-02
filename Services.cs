@@ -15,7 +15,6 @@ public sealed class RawAdapter
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public string Description { get; set; } = "";
-    public string Guid { get; set; } = "";
     public AdapterKind Kind { get; set; }
     public bool AdapterEnabled { get; set; }
     public bool Enabled { get; set; }
@@ -53,30 +52,28 @@ public sealed class AdapterService
     public List<RawAdapter> Query()
     {
         var list = new List<RawAdapter>();
-        using (var s = new ManagementObjectSearcher(
-            "SELECT Name,NetConnectionID,GUID,PhysicalAdapter,ConfigManagerErrorCode,PNPDeviceID FROM Win32_NetworkAdapter WHERE NetConnectionID IS NOT NULL"))
+        using var s = new ManagementObjectSearcher(
+            "SELECT Name,NetConnectionID,GUID,PhysicalAdapter,ConfigManagerErrorCode,PNPDeviceID FROM Win32_NetworkAdapter WHERE NetConnectionID IS NOT NULL");
+        foreach (ManagementBaseObject o in s.Get())
         {
-            foreach (ManagementBaseObject o in s.Get())
+            string desc = o["Name"] as string ?? "";
+            string conn = o["NetConnectionID"] as string ?? desc;
+            string pnp = o["PNPDeviceID"] as string ?? "";
+            bool physical = o["PhysicalAdapter"] is true;
+            // Bluetooth is shown as a radio, not as its network adapter
+            if (pnp.StartsWith("BTH", StringComparison.OrdinalIgnoreCase) || desc.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase)) continue;
+            if (desc.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase)) continue;
+            bool tunnel = pnp.StartsWith(@"ROOT\", StringComparison.OrdinalIgnoreCase) || pnp.StartsWith(@"SWD\", StringComparison.OrdinalIgnoreCase)
+                || pnp.StartsWith("VMS", StringComparison.OrdinalIgnoreCase) || pnp.Length == 0
+                || VirtualWords.Any(w => desc.Contains(w, StringComparison.OrdinalIgnoreCase));
+            var kind = !physical || tunnel ? AdapterKind.Virtual : IsWifiName(desc) || IsWifiName(conn) ? AdapterKind.WiFi : AdapterKind.Ethernet;
+            bool enabled = Convert.ToInt32(o["ConfigManagerErrorCode"] ?? 0) != 22; // 22 = disabled in Device Manager
+            list.Add(new RawAdapter
             {
-                string desc = o["Name"] as string ?? "";
-                string conn = o["NetConnectionID"] as string ?? desc;
-                string pnp = o["PNPDeviceID"] as string ?? "";
-                bool physical = o["PhysicalAdapter"] is true;
-                if (pnp.StartsWith("BTH", StringComparison.OrdinalIgnoreCase) || desc.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase)) continue; // shown as the radio
-                if (desc.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase)) continue;
-                bool tunnel = pnp.StartsWith(@"ROOT\", StringComparison.OrdinalIgnoreCase) || pnp.StartsWith(@"SWD\", StringComparison.OrdinalIgnoreCase)
-                    || pnp.StartsWith("VMS", StringComparison.OrdinalIgnoreCase) || pnp.Length == 0
-                    || VirtualWords.Any(w => desc.Contains(w, StringComparison.OrdinalIgnoreCase));
-                var kind = !physical || tunnel ? AdapterKind.Virtual : IsWifiName(desc) || IsWifiName(conn) ? AdapterKind.WiFi : AdapterKind.Ethernet;
-                bool enabled = Convert.ToInt32(o["ConfigManagerErrorCode"] ?? 0) != 22;
-                string guid = o["GUID"] as string ?? "";
-                list.Add(new RawAdapter
-                {
-                    Id = guid, Guid = guid, Name = conn, Description = desc, Kind = kind,
-                    AdapterEnabled = enabled,
-                    Enabled = enabled && (kind != AdapterKind.WiFi || _wifi == null || _wifi.State == RadioState.On),
-                });
-            }
+                Id = o["GUID"] as string ?? "", Name = conn, Description = desc, Kind = kind,
+                AdapterEnabled = enabled,
+                Enabled = enabled && (kind != AdapterKind.WiFi || _wifi == null || _wifi.State == RadioState.On),
+            });
         }
         if (_bt != null)
             list.Add(new RawAdapter
@@ -97,14 +94,14 @@ public sealed class AdapterService
             case AdapterKind.WiFi:
                 if (on)
                 {
-                    if (!a.AdapterEnabled) await Wmi(a.Guid, true);
+                    if (!a.AdapterEnabled) await Wmi(a.Id, true);
                     if (_wifi != null) await SetRadio(_wifi, true);
                 }
                 else if (!fullyDisable && _wifi != null) await SetRadio(_wifi, false);
-                else await Wmi(a.Guid, false);
+                else await Wmi(a.Id, false);
                 break;
             default:
-                await Wmi(a.Guid, on);
+                await Wmi(a.Id, on);
                 break;
         }
     }
@@ -146,10 +143,10 @@ public sealed class AppTrafficMonitor : IDisposable
     {
         if (!Elevation.IsAdmin) { Error = "Per-app usage needs administrator rights."; return; }
         try { Begin("PulseKernelNet"); }
-        catch (Exception ex)
+        catch
         {
             try { Begin(KernelTraceEventParser.KernelSessionName); }
-            catch (Exception ex2) { Error = "Could not start network tracing: " + ex2.Message; Debug.WriteLine(ex); }
+            catch (Exception ex) { Error = "Could not start network tracing: " + ex.Message; }
         }
     }
 

@@ -12,22 +12,17 @@ public sealed class GraphControl : FrameworkElement
     double _max = 125_000;
     public bool UseBits { get; set; }
 
-    static Brush B(string hex) { var b = (Brush)new BrushConverter().ConvertFromString(hex)!; b.Freeze(); return b; }
-    static readonly Brush DownFill = Grad(0x60, 0xCD, 0xFF), UpFill = Grad(0x7B, 0xE0, 0x8A);
-    static readonly Pen DownPen = Stroke(0x60, 0xCD, 0xFF), UpPen = Stroke(0x7B, 0xE0, 0x8A);
-    static readonly Pen GridPen = Stroke(0xFF, 0xFF, 0xFF, 0x14, 1);
-    static readonly Brush LabelBrush = B("#8BFFFFFF");
+    static readonly Color DownColor = Color.FromRgb(0x60, 0xCD, 0xFF), UpColor = Color.FromRgb(0x7B, 0xE0, 0x8A);
+    static readonly Brush DownFill = Fade(DownColor), UpFill = Fade(UpColor);
+    static readonly Pen DownPen = Line(DownColor, 1.75), UpPen = Line(UpColor, 1.75);
+    static readonly Pen GridPen = Line(Color.FromArgb(0x14, 255, 255, 255), 1);
+    static readonly Brush LabelBrush = Frozen(new SolidColorBrush(Color.FromArgb(0x8B, 255, 255, 255)));
 
-    static Brush Grad(byte r, byte g, byte b)
-    {
-        var br = new LinearGradientBrush(Color.FromArgb(0x59, r, g, b), Color.FromArgb(0x04, r, g, b), 90);
-        br.Freeze(); return br;
-    }
-    static Pen Stroke(byte r, byte g, byte b, byte a = 255, double t = 1.75)
-    {
-        var p = new Pen(new SolidColorBrush(Color.FromArgb(a, r, g, b)), t) { LineJoin = PenLineJoin.Round };
-        p.Freeze(); return p;
-    }
+    static T Frozen<T>(T f) where T : Freezable { f.Freeze(); return f; }
+
+    static Brush Fade(Color c) => Frozen(new LinearGradientBrush(Color.FromArgb(0x59, c.R, c.G, c.B), Color.FromArgb(0x04, c.R, c.G, c.B), 90));
+
+    static Pen Line(Color c, double thickness) => Frozen(new Pen(new SolidColorBrush(c), thickness) { LineJoin = PenLineJoin.Round });
 
     public void Push(double down, double up)
     {
@@ -55,24 +50,33 @@ public sealed class GraphControl : FrameworkElement
     {
         double step = w / (N - 1);
         Point P(int i) => new(i * step, h - 2 - Math.Min(v[i] / _max, 1) * (h - 8));
+
+        // smooth curve through the samples, each one a control point ending at the midpoint to the next
+        void Curve(StreamGeometryContext c)
+        {
+            for (int i = 1; i < N; i++)
+            {
+                Point a = P(i - 1), b = P(i);
+                c.QuadraticBezierTo(a, new Point((a.X + b.X) / 2, (a.Y + b.Y) / 2), true, false);
+            }
+            c.LineTo(P(N - 1), true, false);
+        }
+
         var area = new StreamGeometry();
-        var line = new StreamGeometry();
         using (var c = area.Open())
         {
             c.BeginFigure(new Point(0, h), true, true);
             c.LineTo(P(0), true, false);
-            for (int i = 1; i < N; i++) { var a = P(i - 1); var b = P(i); c.QuadraticBezierTo(a, new Point((a.X + b.X) / 2, (a.Y + b.Y) / 2), true, false); }
-            c.LineTo(P(N - 1), true, false);
+            Curve(c);
             c.LineTo(new Point(w, h), true, false);
         }
+        var line = new StreamGeometry();
         using (var c = line.Open())
         {
             c.BeginFigure(P(0), false, false);
-            for (int i = 1; i < N; i++) { var a = P(i - 1); var b = P(i); c.QuadraticBezierTo(a, new Point((a.X + b.X) / 2, (a.Y + b.Y) / 2), true, false); }
-            c.LineTo(P(N - 1), true, false);
+            Curve(c);
         }
-        area.Freeze(); line.Freeze();
-        dc.DrawGeometry(fill, null, area);
-        dc.DrawGeometry(null, pen, line);
+        dc.DrawGeometry(fill, null, Frozen(area));
+        dc.DrawGeometry(null, pen, Frozen(line));
     }
 }

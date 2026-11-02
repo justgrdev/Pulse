@@ -6,7 +6,6 @@ using System.Windows.Data;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
@@ -54,14 +53,20 @@ public sealed partial class AdapterVM : ObservableObject
         get => _isOn;
         set
         {
-            if (_isOn == value) return;
-            _isOn = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(StatusText));
-            OnPropertyChanged(nameof(ShowRates));
-            if (!_syncing) _ = ApplyAsync(value);
-            else _vm.RefreshHeader();
+            if (!SetOn(value)) return;
+            if (_syncing) _vm.RefreshHeader();
+            else _ = ApplyAsync(value);
         }
+    }
+
+    bool SetOn(bool value)
+    {
+        if (_isOn == value) return false;
+        _isOn = value;
+        OnPropertyChanged(nameof(IsOn));
+        OnPropertyChanged(nameof(StatusText));
+        OnPropertyChanged(nameof(ShowRates));
+        return true;
     }
 
     public bool InGameMode
@@ -86,7 +91,6 @@ public sealed partial class AdapterVM : ObservableObject
     public void SetRate(double down, double up, bool bits) =>
         RatesText = $"↓ {Fmt.Rate(down, bits)}   ↑ {Fmt.Rate(up, bits)}";
 
-
     async Task ApplyAsync(bool on)
     {
         Busy = true; Error = null;
@@ -101,13 +105,7 @@ public sealed partial class AdapterVM : ObservableObject
         _vm.RequestRefresh();
     }
 
-    public Task ApplyAndWait(bool on)
-    {
-        if (IsOn == on) return Task.CompletedTask;
-        _isOn = on;
-        OnPropertyChanged(nameof(IsOn)); OnPropertyChanged(nameof(StatusText)); OnPropertyChanged(nameof(ShowRates));
-        return ApplyAsync(on);
-    }
+    public Task ApplyAndWait(bool on) => SetOn(on) ? ApplyAsync(on) : Task.CompletedTask;
 }
 
 public sealed partial class AppUsageVM : ObservableObject
@@ -117,26 +115,27 @@ public sealed partial class AppUsageVM : ObservableObject
     public string Key { get; }
     public string Name { get; }
     public ImageSource? Icon { get; }
-    public double TotalBytes { get; private set; }
-    public double Rate { get; private set; }
+    public double Rate => DownRate + UpRate;
 
+    [ObservableProperty] double _downRate;
+    [ObservableProperty] double _upRate;
+    [ObservableProperty] double _totalBytes;
     [ObservableProperty] string _downText = "–";
     [ObservableProperty] string _upText = "–";
     [ObservableProperty] string _totalText = "";
     [ObservableProperty] double _share;
-    [ObservableProperty] double _sortScore;
     [ObservableProperty] double _dim = 1;
 
     public void Update(double down, double up, long dBytes, long uBytes, bool bits)
     {
-        Rate = down + up;
+        DownRate = down;
+        UpRate = up;
         TotalBytes += dBytes + uBytes;
         DownText = down >= 1 ? Fmt.Rate(down, bits) : "–";
         UpText = up >= 1 ? Fmt.Rate(up, bits) : "–";
         TotalText = Fmt.Size(TotalBytes);
         _idle = Rate > 0 ? 0 : _idle + 1;
         Dim = Rate > 0 ? 1 : _idle > 10 ? 0.45 : 0.75;
-        SortScore = Rate + TotalBytes / 1e12;
     }
 }
 
@@ -218,8 +217,40 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public MainViewModel()
     {
         AppsView = new ListCollectionView(Apps) { IsLiveSorting = true };
-        AppsView.SortDescriptions.Add(new SortDescription(nameof(AppUsageVM.SortScore), ListSortDirection.Descending));
-        AppsView.LiveSortingProperties.Add(nameof(AppUsageVM.SortScore));
+        ApplySort();
+    }
+
+    public string NameMark => SortMark("Name");
+    public string DownMark => SortMark("Download");
+    public string UpMark => SortMark("Upload");
+    public string TotalMark => SortMark("Total");
+
+    string SortMark(string key) => Settings.SortKey != key ? "" : Settings.SortDescending ? " ↓" : " ↑";
+
+    [RelayCommand]
+    void SortBy(string key)
+    {
+        if (Settings.SortKey == key) Settings.SortDescending = !Settings.SortDescending;
+        else { Settings.SortKey = key; Settings.SortDescending = key != "Name"; }
+        Settings.Save();
+        ApplySort();
+    }
+
+    void ApplySort()
+    {
+        string prop = Settings.SortKey switch
+        {
+            "Name" => nameof(AppUsageVM.Name),
+            "Download" => nameof(AppUsageVM.DownRate),
+            "Upload" => nameof(AppUsageVM.UpRate),
+            _ => nameof(AppUsageVM.TotalBytes),
+        };
+        AppsView.SortDescriptions.Clear();
+        AppsView.LiveSortingProperties.Clear();
+        AppsView.SortDescriptions.Add(new SortDescription(prop, Settings.SortDescending ? ListSortDirection.Descending : ListSortDirection.Ascending));
+        if (prop != nameof(AppUsageVM.Name)) AppsView.SortDescriptions.Add(new SortDescription(nameof(AppUsageVM.Name), ListSortDirection.Ascending));
+        AppsView.LiveSortingProperties.Add(prop);
+        foreach (var m in new[] { nameof(NameMark), nameof(DownMark), nameof(UpMark), nameof(TotalMark) }) OnPropertyChanged(m);
     }
 
     public async Task StartAsync()
@@ -255,9 +286,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             if (vm != null) { vm.Sync(r); continue; }
             vm = new AdapterVM(this, r, Settings.Prefs(r.Id, r.Kind != AdapterKind.Virtual));
             var list = r.Kind == AdapterKind.Virtual ? VirtualAdapters : Adapters;
-            int i = 0;
-            while (i < list.Count && Comparer<(int, string)>.Default.Compare((Order(list[i]), list[i].Name), (Order(vm), vm.Name)) <= 0) i++;
-            list.Insert(i, vm);
+            list.Insert(list.TakeWhile(a => (Order(a), a.Name).CompareTo((Order(vm), vm.Name)) <= 0).Count(), vm);
             Settings.Save();
         }
         foreach (var gone in all.Where(a => raws.All(r => r.Id != a.Id)).ToList())

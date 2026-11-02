@@ -60,15 +60,17 @@ public sealed class AppSettings
 {
     public bool UseBits { get; set; }
     public bool CloseToTray { get; set; } = true;
+    public string SortKey { get; set; } = "Total"; // Name, Download, Upload or Total
+    public bool SortDescending { get; set; } = true;
     public Dictionary<string, AdapterPrefs> Adapters { get; set; } = new();
     public List<string> OfflineSnapshot { get; set; } = new();
 
-    static readonly string PathFile = System.IO.Path.Combine(
+    static readonly string FilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Pulse", "settings.json");
 
     public static AppSettings Load()
     {
-        try { return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(PathFile)) ?? new(); }
+        try { return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath)) ?? new(); }
         catch { return new(); }
     }
 
@@ -76,12 +78,12 @@ public sealed class AppSettings
     {
         try
         {
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(PathFile)!);
-            var tmp = PathFile + ".tmp";
+            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            var tmp = FilePath + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-            File.Move(tmp, PathFile, true);
+            File.Move(tmp, FilePath, true);
         }
-        catch { /* settings are best-effort */ }
+        catch { } // losing a settings write isn't worth crashing for
     }
 
     public AdapterPrefs Prefs(string id, bool defaultInGameMode)

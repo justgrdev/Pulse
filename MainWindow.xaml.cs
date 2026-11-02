@@ -10,6 +10,9 @@ public partial class MainWindow : Window
 {
     const int WM_HOTKEY = 0x0312, HotkeyId = 0x504C;
     const uint MOD_ALT = 1, MOD_CONTROL = 2, MOD_NOREPEAT = 0x4000;
+    const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20, DWMWA_BORDER_COLOR = 34, DWMWA_CAPTION_COLOR = 35, DWMWA_SYSTEMBACKDROP_TYPE = 38;
+    const int DWMSBT_MAINWINDOW = 2; // Mica
+    const int DWMWA_COLOR_NONE = unchecked((int)0xFFFFFFFE);
 
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int val, int size);
     [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr hWnd, int id, uint mods, uint vk);
@@ -38,9 +41,11 @@ public partial class MainWindow : Window
         base.OnSourceInitialized(e);
         _hwnd = new WindowInteropHelper(this).Handle;
         var source = HwndSource.FromHwnd(_hwnd)!;
-        int on = 1, mica = 2;
-        DwmSetWindowAttribute(_hwnd, 20, ref on, 4);   // dark title bar
-        if (DwmSetWindowAttribute(_hwnd, 38, ref mica, 4) == 0) // Mica backdrop
+        int dark = 1, noColor = DWMWA_COLOR_NONE, border = 0x3A3A3A, mica = DWMSBT_MAINWINDOW;
+        DwmSetWindowAttribute(_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref dark, 4);
+        DwmSetWindowAttribute(_hwnd, DWMWA_CAPTION_COLOR, ref noColor, 4); // otherwise Windows tints the title bar with the accent color
+        DwmSetWindowAttribute(_hwnd, DWMWA_BORDER_COLOR, ref border, 4);
+        if (DwmSetWindowAttribute(_hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref mica, 4) == 0)
         {
             source.CompositionTarget.BackgroundColor = Colors.Transparent;
             Background = Brushes.Transparent;
